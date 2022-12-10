@@ -1,3 +1,12 @@
+import numpy as np
+import torch
+import torch.nn.functional as F
+import torchvision
+from torch import nn, optim
+from torch.autograd import Variable
+from torchvision import transforms
+
+
 class Normal(object):
     def __init__(self, mu, sigma, log_sigma, v=None, r=None):
         self.mu = mu
@@ -25,8 +34,8 @@ class Encoder(torch.nn.Module):
 class Decoder(torch.nn.Module):
     def __init__(self, D_in, H, D_out):
         super(Decoder, self).__init__()
-        self.linear1 = torch.nn.Linear(D_in, H)
-        self.linear2 = torch.nn.Linear(H, D_out)
+        self.linear1 = torch.nn.Linear(D_in, H)  # 8 -> 100
+        self.linear2 = torch.nn.Linear(H, D_out)  # 100 -> 28 * 28
     
     def forward(self, x):
         x = F.relu(self.linear1(x))
@@ -45,33 +54,36 @@ class VAE(torch.nn.Module):
     
     def _sample_latent(self, h_enc):
         """ Return the latent normal sample z ~ N(mu, sigma^2) """
-        mu = self._enc_mu(h_enc)
-        log_sigma = self._enc_log_sigma(h_enc)
-        sigma = torch.exp(log_sigma)
-        std_z = torch.from_numpy(np.random.normal(0, 1, size=sigma.size())).float()
+        mu = self._enc_mu(h_enc)  # 100 -> 8
+        log_sigma = self._enc_log_sigma(h_enc)  # 100 -> 8
+        sigma = torch.exp(log_sigma)  # 100 -> 8
+        std_z = torch.from_numpy(np.random.normal(0, 1, size=sigma.size())).float()  # 从 0，1 标准分布中抽取一个z变量
         
         self.z_mean = mu
         self.z_sigma = sigma
         
-        return mu + sigma * Variable(std_z, requires_grad=False)  # Reparameterization trick
+        return mu + sigma * Variable(std_z, requires_grad=False)  # Reparameterization trick 
     
     def forward(self, state):
-        h_enc = self.encoder(state)
-        z = self._sample_latent(h_enc)
-        return self.decoder(z)
-
-    # 这部分是编码器生成与正态分布的差别，在loss中占一部分 def latent_loss(z_mean, z_stddev):
+        h_enc = self.encoder(state)  # 28 * 28 -> 100 -> 100
+        z = self._sample_latent(h_enc)  # 8
+        return self.decoder(z)  # 8 -> 100 -> 28 * 28
+    
+# 这部分是编码器生成与正态分布的差别，在loss中占一部分
+def latent_loss(z_mean, z_stddev):
     mean_sq = z_mean * z_mean
     stddev_sq = z_stddev * z_stddev
     return 0.5 * torch.mean(mean_sq + stddev_sq - torch.log(stddev_sq) - 1)
 
 
 if __name__ == '__main__':
-    
     input_dim = 28 * 28
     batch_size = 32
     
-    mnist = torchvision.datasets.MNIST('./', download=True)
+    transform = transforms.Compose([
+        transforms.ToTensor()
+    ])
+    mnist = torchvision.datasets.MNIST('./', download=True, transform=transform)
     
     dataloader = torch.utils.data.DataLoader(mnist, batch_size=batch_size,
                                              shuffle=True, num_workers=2)
@@ -93,8 +105,9 @@ if __name__ == '__main__':
             optimizer.zero_grad()
             dec = vae(inputs)
             ll = latent_loss(vae.z_mean, vae.z_sigma)
-            # 损失包含两部分，一部分是正太分布的损失，一部分是生成与预期的损失             loss = criterion(dec, inputs) + ll
+            # 损失包含两部分，一部分是正太分布的损失，一部分是生成与预期的损失
+            loss = criterion(dec, inputs) + ll
             loss.backward()
             optimizer.step()
-            l = loss.data[0]
+            l = loss.data
         print(epoch, l)
